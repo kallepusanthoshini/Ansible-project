@@ -1,0 +1,114 @@
+---
+- name: Install Git, Maven, and Tomcat on Target Hosts
+  hosts: all
+  become: true
+  tasks:
+    # Install Git, Maven, and Java
+    - name: Install required tools on CentOS/RHEL
+      yum:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - git
+        - maven
+        - java-11-openjdk
+      when: ansible_pkg_mgr == "yum"
+
+    - name: Install required tools on Debian/Ubuntu
+      apt:
+        name: "{{ item }}"
+        state: present
+        update_cache: yes
+      loop:
+        - git
+        - maven
+        - openjdk-11-jdk
+      when: ansible_pkg_mgr == "apt"
+
+    # Install Tomcat 9
+    - name: Download Tomcat 9 tar.gz
+      get_url:
+        url: https://archive.apache.org/dist/tomcat/tomcat-9/v9.0.45/bin/apache-tomcat-9.0.45.tar.gz
+        dest: /tmp/apache-tomcat.tar.gz
+
+    - name: Extract Tomcat
+      unarchive:
+        src: /tmp/apache-tomcat.tar.gz
+        dest: /opt/
+        remote_src: yes
+
+    - name: Set permissions for Tomcat directory
+      file:
+        path: /opt/apache-tomcat-9.0.45
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Create a symlink for easy access to Tomcat
+      file:
+        src: /opt/apache-tomcat-9.0.45
+        dest: /opt/tomcat
+        state: link
+
+    # Create a systemd service for Tomcat
+    - name: Create systemd service for Tomcat
+      copy:
+        dest: /etc/systemd/system/tomcat.service
+        content: |
+          [Unit]
+          Description=Tomcat 9 Web Application Container
+          After=network.target
+
+          [Service]
+          Type=forking
+          Environment=JAVA_HOME=/usr/lib/jvm/java-11-openjdk
+          Environment=CATALINA_PID=/opt/tomcat/temp/tomcat.pid
+          Environment=CATALINA_HOME=/opt/tomcat
+          Environment=CATALINA_BASE=/opt/tomcat
+          ExecStart=/opt/tomcat/bin/startup.sh
+          ExecStop=/opt/tomcat/bin/shutdown.sh
+          User=root
+          Group=root
+          UMask=0007
+          RestartSec=10
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+      notify:
+        - Reload systemd
+
+    # Start and enable Tomcat service
+    - name: Start and enable Tomcat service
+      service:
+        name: tomcat
+        state: started
+        enabled: true
+
+    # Deploy application from Git repository to Tomcat
+    - name: Clone Git Repository
+      git:
+        repo: https://github.com/kallepusanthoshini/pet_shop.git
+        dest: /opt/tomcat/webapps/petshop
+        version: main
+
+    - name: Build the application using Maven
+      shell: mvn clean package
+      args:
+        chdir: /opt/tomcat/webapps/petshop
+
+    - name: Deploy WAR file to Tomcat
+      copy:
+        src: /opt/tomcat/webapps/petshop/target/petshop.war
+        dest: /opt/tomcat/webapps/
+        remote_src: yes
+
+    - name: Restart Tomcat
+      service:
+        name: tomcat
+        state: restarted
+
+  handlers:
+    - name: Reload systemd
+      command: systemctl daemon-reload
